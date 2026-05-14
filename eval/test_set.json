@@ -1,0 +1,165 @@
+[
+  {
+    "id": "F1",
+    "family": "factual",
+    "query": "What did I rate Andor Season 1?",
+    "relevant_entity_ids": ["e_andor_s1"],
+    "expected_intent": "factual",
+    "notes": "Title lookup. Router must send to factual path. Taste OFF."
+  },
+  {
+    "id": "F2",
+    "family": "factual",
+    "query": "Which Sith Lords are in my catalogue?",
+    "relevant_entity_ids": ["c_vader", "c_palpatine_pt_ot", "c_dooku", "c_maul", "c_palp_sequels"],
+    "expected_intent": "factual",
+    "notes": "Faction filter. 5-entry gold."
+  },
+  {
+    "id": "F3",
+    "family": "factual",
+    "query": "Which Jedi Council members from the prequel era are in my catalogue?",
+    "relevant_entity_ids": ["c_yoda", "c_macewindu", "c_quigon", "c_obiwan_pt"],
+    "expected_intent": "factual",
+    "notes": "Tighter factual filter — Council members specifically. 4-entry gold."
+  },
+  {
+    "id": "F4",
+    "family": "factual",
+    "query": "Did I include any Legends entries?",
+    "relevant_entity_ids": ["c_thrawn_legends", "c_revan"],
+    "expected_intent": "factual",
+    "notes": "canon_status filter."
+  },
+  {
+    "id": "F5",
+    "family": "factual",
+    "query": "Ships from the original trilogy era",
+    "relevant_entity_ids": ["s_falcon", "s_xwing", "s_tie", "s_stardestroyer", "s_deathstar"],
+    "expected_intent": "factual",
+    "notes": "type + era filter. 5-entry gold (excluding U-wing and AT-AT which are also OT-era to keep gold tight; mark these as plausibly-correct)."
+  },
+
+  {
+    "id": "C1",
+    "family": "cross_modal",
+    "query": "Who wears glossy black armor with a flowing cape and red lightsaber?",
+    "relevant_entity_ids": ["c_vader"],
+    "expected_intent": "similarity",
+    "notes": "Visual_description token match + CLIP."
+  },
+  {
+    "id": "C2",
+    "family": "cross_modal",
+    "query": "The character with red and black face tattoos and a double-bladed lightsaber",
+    "relevant_entity_ids": ["c_maul"],
+    "expected_intent": "similarity",
+    "notes": "Distinctive visual features."
+  },
+  {
+    "id": "C3",
+    "family": "cross_modal",
+    "query": "The tropical beach planet where Imperial walkers wade through shallow turquoise water",
+    "relevant_entity_ids": ["p_scarif"],
+    "expected_intent": "similarity",
+    "notes": "Very distinctive visual: tropical beach + military walkers is a unique combination. Strong CLIP + visual_description test."
+  },
+  {
+    "id": "C4",
+    "family": "cross_modal",
+    "query": "The droid that looks like a soccer ball",
+    "relevant_entity_ids": ["c_bb8"],
+    "expected_intent": "similarity",
+    "notes": "Quintessential CLIP cross-modal test. 'Soccer ball' is a real-world concept CLIP knows extremely well, BB-8's spherical shape is unmistakable. Strong image-pathway contribution expected."
+  },
+  {
+    "id": "C5",
+    "family": "cross_modal",
+    "query": "Small green creature with long ears and large dark eyes",
+    "relevant_entity_ids": ["c_grogu", "c_yoda"],
+    "expected_intent": "similarity",
+    "notes": "Multi-answer gold — both match (same species). Tests Recall@5 on multi-correct queries."
+  },
+
+  {
+    "id": "M1",
+    "family": "multi_hop",
+    "query": "Jedi from the prequel era that I rated 9 or above",
+    "relevant_entity_ids": ["c_obiwan_pt", "c_yoda", "c_macewindu", "c_quigon", "c_anakin"],
+    "expected_intent": "comparative",
+    "notes": "era + faction + rating filter. 5-entry gold."
+  },
+  {
+    "id": "M2",
+    "family": "multi_hop",
+    "query": "Characters who appear in both Rogue One and the original trilogy",
+    "relevant_entity_ids": ["c_vader", "c_leia", "c_mon_mothma", "c_tarkin"],
+    "expected_intent": "comparative",
+    "notes": "Cross-medium membership."
+  },
+  {
+    "id": "M3",
+    "family": "multi_hop",
+    "query": "Which prequel-era ship did I rate highest?",
+    "relevant_entity_ids": ["s_jedi_interceptor"],
+    "expected_intent": "comparative",
+    "notes": "era filter + ranking. Jedi Interceptor (8) > Naboo (7). Republic Gunship is clone_wars, not prequel."
+  },
+  {
+    "id": "M4",
+    "family": "multi_hop",
+    "query": "Episodes I rated 10 from shows, not films",
+    "relevant_entity_ids": ["e_obi_vader_rematch", "e_andor_s1"],
+    "expected_intent": "comparative",
+    "notes": "type + medium + rating filter."
+  },
+  {
+    "id": "M5",
+    "family": "multi_hop",
+    "query": "Tragic episodes from the prequel era I rated 10",
+    "relevant_entity_ids": ["e_order66", "e_anakin_fall"],
+    "expected_intent": "comparative",
+    "notes": "type + era + mood + rating filter."
+  },
+
+  {
+    "id": "A1",
+    "family": "ambiguous_personalised",
+    "query": "Recommend a deeply tragic character arc",
+    "relevant_entity_ids": ["c_anakin", "c_cassian", "c_obiwan_pt", "c_ahsoka", "e_order66"],
+    "expected_intent": "mood_tragic",
+    "notes": "mood_tragic centroid should fire. Mix of characters and episodes."
+  },
+  {
+    "id": "A2",
+    "family": "ambiguous_personalised",
+    "query": "Something epic and cathartic for a rewatch",
+    "relevant_entity_ids": ["e_vader_hallway", "e_obi_vader_rematch", "c_vader", "p_crait", "e_mando_s2_finale"],
+    "expected_intent": "mood_epic",
+    "notes": "Router picks dominant mood. Either mood_epic or mood_cathartic accepted as 'correct' router."
+  },
+  {
+    "id": "A3",
+    "family": "ambiguous_personalised",
+    "query": "I'm in the mood for political intrigue Star Wars",
+    "relevant_entity_ids": ["e_andor_s1", "c_palpatine_pt_ot", "c_mon_mothma", "c_luthen", "c_tarkin"],
+    "expected_intent": "mood_political",
+    "notes": "mood_political centroid should retrieve Andor + political characters."
+  },
+  {
+    "id": "A4",
+    "family": "ambiguous_personalised",
+    "query": "Something cathartic that pays off a long setup",
+    "relevant_entity_ids": ["e_vader_hallway", "e_obi_vader_rematch", "e_mando_s2_finale", "c_han"],
+    "expected_intent": "mood_cathartic",
+    "notes": "mood_cathartic centroid. Payoff queries — explicit cathartic test."
+  },
+  {
+    "id": "A5",
+    "family": "ambiguous_personalised",
+    "query": "Pick something fun and lighter for casual watching",
+    "relevant_entity_ids": ["c_bb8", "c_r2d2", "c_c3po", "c_k2so", "c_han"],
+    "expected_intent": "mood_goofy",
+    "notes": "mood_goofy centroid test — droids + Han carry goofy-tagged content. Now viable thanks to 7 entries rated >=7 tagged goofy."
+  }
+]
