@@ -1,6 +1,7 @@
 """Streamlit UI. Run: streamlit run src/app.py"""
 from __future__ import annotations
 import sys
+import time
 from pathlib import Path
 
 # Ensure project root is on sys.path so `from src import ...` works regardless
@@ -19,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Custom CSS ─────────────────────────────────────────────────────────────────
+# ── Custom CSS ──────────────────────────────────────────────────────────────────
 st.markdown(
     """
     <style>
@@ -37,6 +38,11 @@ st.markdown(
     .badge-mood       { background:#3a1e5f; color:#c8a7e3; }
     .badge-taste-on   { background:#1e5f2a; color:#7ee39a; }
     .badge-taste-off  { background:#3a3a3a; color:#aaaaaa; }
+    .sys-S1 { background:#2a2a2a; color:#aaaaaa; }
+    .sys-S2 { background:#1e3a5f; color:#7ec8e3; }
+    .sys-S3 { background:#5f3a1e; color:#e3b07e; }
+    .sys-S4 { background:#5f1e1e; color:#e37e7e; }
+    .sys-S5 { background:#4a3a00; color:#ffd700; }
     .answer-box {
         background: #0e1117;
         border-left: 3px solid #ffd700;
@@ -46,64 +52,74 @@ st.markdown(
         font-size: 1.02rem;
         line-height: 1.6;
     }
-    .entity-card {
-        background: #1a1d23;
-        border-radius: 10px;
-        padding: 10px;
-        text-align: center;
-        height: 100%;
-    }
-    .score-bar-label {
-        font-size: 0.72rem;
-        color: #aaa;
-    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# ── System definitions ──────────────────────────────────────────────────────────
+
+SYSTEM_META = {
+    "S1 — Plain LLM (no retrieval)": {
+        "id": "S1", "short": "S1: Plain LLM",
+        "desc": "Gemini only, no catalogue access. Always wrong on factual queries.",
+        "use_taste": False, "taste_key": None,
+    },
+    "S2 — Hybrid retrieval, no taste": {
+        "id": "S2", "short": "S2: No taste",
+        "desc": "Text + image retrieval. Taste vector never applied.",
+        "use_taste": False, "taste_key": None,
+    },
+    "S3 — Always-on overall centroid": {
+        "id": "S3", "short": "S3: Always overall taste",
+        "desc": "Overall taste centroid always applied — even on factual queries.",
+        "use_taste": True, "taste_key": "overall",
+    },
+    "S4 — Always-on mood_tragic centroid": {
+        "id": "S4", "short": "S4: Always mood_tragic",
+        "desc": "mood_tragic centroid always applied — wrong centroid on non-tragic queries.",
+        "use_taste": True, "taste_key": "mood_tragic",
+    },
+    "S5 — Full agent: router + mood centroids": {
+        "id": "S5", "short": "S5: Full agent ✦",
+        "desc": "Router classifies intent, applies the right mood centroid only when helpful.",
+        "use_taste": None, "taste_key": None,  # determined at runtime
+    },
+}
+
+SYSTEM_LABELS = list(SYSTEM_META.keys())
+
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
 INTENT_EMOJI = {
-    "factual": "🔍",
-    "similarity": "👁️",
-    "comparative": "⚖️",
-    "mood_tragic": "💔",
-    "mood_epic": "⚡",
-    "mood_political": "🏛️",
-    "mood_cathartic": "✨",
-    "mood_goofy": "😄",
-    "mood_general": "🌌",
+    "factual": "🔍", "similarity": "👁️", "comparative": "⚖️",
+    "mood_tragic": "💔", "mood_epic": "⚡", "mood_political": "🏛️",
+    "mood_cathartic": "✨", "mood_goofy": "😄", "mood_general": "🌌",
 }
 
-INTENT_CLASS = {
-    "factual": "badge-factual",
-    "similarity": "badge-similarity",
+INTENT_CSS = {
+    "factual": "badge-factual", "similarity": "badge-similarity",
     "comparative": "badge-comparative",
 }
 
 
+def system_badge(sys_id: str, short: str) -> str:
+    return f'<span class="intent-badge sys-{sys_id}">{short}</span>'
+
+
 def intent_badge(intent: str, confidence: float) -> str:
-    css = INTENT_CLASS.get(intent, "badge-mood")
+    css = INTENT_CSS.get(intent, "badge-mood")
     emoji = INTENT_EMOJI.get(intent, "🌌")
-    return (
-        f'<span class="intent-badge {css}">'
-        f'{emoji} {intent} ({confidence:.0%})'
-        f"</span>"
-    )
+    return f'<span class="intent-badge {css}">{emoji} {intent} ({confidence:.0%})</span>'
 
 
 def taste_badge(use_taste: bool, taste_key: str | None) -> str:
     if use_taste:
-        return (
-            f'<span class="intent-badge badge-taste-on">'
-            f"✅ taste ON · {taste_key}"
-            f"</span>"
-        )
+        return f'<span class="intent-badge badge-taste-on">✅ taste ON · {taste_key}</span>'
     return '<span class="intent-badge badge-taste-off">⬜ taste OFF</span>'
 
 
-def _entity_image(entity_id: str):
+def _entity_image(entity_id: str) -> str | None:
     for ext in (".jpg", ".jpeg", ".png", ".webp"):
         p = config.IMAGES_DIR / f"{entity_id}{ext}"
         if p.exists():
@@ -111,9 +127,16 @@ def _entity_image(entity_id: str):
     return None
 
 
+@st.cache_resource(show_spinner="Loading models…")
+def _load_retrieve_and_llm():
+    from src.retrieve import retrieve
+    from src import llm
+    return retrieve, llm
+
+
 @st.cache_resource(show_spinner="Loading agent…")
-def get_agent():
-    from src.agent import run_agent  # noqa: deferred to avoid import at startup
+def _load_agent():
+    from src.agent import run_agent
     return run_agent
 
 
@@ -122,13 +145,64 @@ def load_catalogue() -> pd.DataFrame:
     return pd.read_csv(config.ENTITIES_CSV)
 
 
+# ── Run a system variant ────────────────────────────────────────────────────────
+
+def run_system(query: str, label: str) -> dict:
+    meta = SYSTEM_META[label]
+    sys_id = meta["id"]
+
+    if sys_id == "S1":
+        retrieve, llm = _load_retrieve_and_llm()
+        t0 = time.perf_counter()
+        answer = "I don't have access to your catalogue in this mode — this is the plain LLM baseline."
+        latency_ms = (time.perf_counter() - t0) * 1000
+        return {
+            "system_id": sys_id, "system_short": meta["short"],
+            "answer": answer, "results": [],
+            "use_taste": False, "taste_key": None,
+            "intent": None, "intent_confidence": None,
+            "latency_ms": latency_ms,
+        }
+
+    if sys_id == "S5":
+        run_agent = _load_agent()
+        out = run_agent(query)
+        results = out.get("results", [])
+        return {
+            "system_id": sys_id, "system_short": meta["short"],
+            "answer": out.get("answer", ""),
+            "results": results,
+            "use_taste": out.get("use_taste", False),
+            "taste_key": out.get("taste_key"),
+            "intent": out.get("intent"),
+            "intent_confidence": out.get("intent_confidence"),
+            "latency_ms": out.get("trace", {}).get("total_ms", 0),
+        }
+
+    # S2 / S3 / S4
+    retrieve, llm = _load_retrieve_and_llm()
+    t0 = time.perf_counter()
+    trace = retrieve(query, use_taste=meta["use_taste"], taste_key=meta["taste_key"] or "overall")
+    synth = llm.synthesise_answer(query, [r.metadata for r in trace.results])
+    latency_ms = (time.perf_counter() - t0) * 1000
+    return {
+        "system_id": sys_id, "system_short": meta["short"],
+        "answer": synth,
+        "results": trace.results,
+        "use_taste": meta["use_taste"],
+        "taste_key": meta["taste_key"],
+        "intent": None,
+        "intent_confidence": None,
+        "latency_ms": latency_ms,
+    }
+
+
 # ── Render result cards ─────────────────────────────────────────────────────────
 
 def render_results(results, debug: bool = False):
     if not results:
-        st.warning("No results returned.")
+        st.info("No retrieved results for this system.")
         return
-
     cols = st.columns(len(results))
     for col, r in zip(cols, results):
         meta = r.metadata
@@ -137,30 +211,23 @@ def render_results(results, debug: bool = False):
             if img:
                 st.image(img, use_container_width=True)
             st.markdown(f"**{meta['name']}**")
-            st.caption(
-                f"⭐ {meta['your_rating']}/10 · {meta['type']} · {meta['era']}"
-            )
+            st.caption(f"⭐ {meta['your_rating']}/10 · {meta['type']} · {meta['era']}")
             st.caption(f"*{meta['mood']}*")
             with st.expander("Your take"):
                 st.write(meta["your_take"])
             if debug:
-                total = r.final_score
                 comps = r.components
-                st.caption("Score components")
-                for label, val in [
+                for lbl, val in [
                     ("query_sim", comps["query_sim"]),
                     ("taste_align", comps["taste_align"]),
                     ("meta_score", comps["meta_score"]),
                     ("image_sim", comps["image_sim"]),
                 ]:
-                    st.progress(
-                        min(float(val), 1.0),
-                        text=f"{label}: {val:.3f}",
-                    )
-                st.caption(f"**final: {total:.3f}**")
+                    st.progress(min(float(val), 1.0), text=f"{lbl}: {val:.3f}")
+                st.caption(f"**final: {r.final_score:.3f}**")
 
 
-# ── Tabs ────────────────────────────────────────────────────────────────────────
+# ── Layout ──────────────────────────────────────────────────────────────────────
 
 st.title("🌌 Taste-Aware Star Wars Agent")
 st.caption("UQ INFS4205/7205 — A3 · Personalised Multimodal Retrieval")
@@ -171,8 +238,20 @@ tab_chat, tab_debug, tab_catalogue = st.tabs(["💬 Chat", "🔧 Debug", "📚 C
 # ── TAB 1: Chat ─────────────────────────────────────────────────────────────────
 
 with tab_chat:
-    st.markdown("Ask anything about your Star Wars catalogue.")
+    # System selector
+    st.markdown("**System variant**")
+    sel_system = st.radio(
+        "system",
+        SYSTEM_LABELS,
+        index=4,  # default to S5
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.caption(f"_{SYSTEM_META[sel_system]['desc']}_")
 
+    st.divider()
+
+    # Example queries
     EXAMPLES = [
         "a deeply tragic character arc",
         "What did I rate Andor Season 1?",
@@ -181,7 +260,6 @@ with tab_chat:
         "Jedi I rated 9+ from the prequel era",
         "scheming political villains",
     ]
-
     st.markdown("**Try an example:**")
     ex_cols = st.columns(len(EXAMPLES))
     clicked = None
@@ -197,17 +275,17 @@ with tab_chat:
     )
 
     if query:
-        run_agent = get_agent()
-        with st.spinner("Routing query and retrieving…"):
-            out = run_agent(query)
+        with st.spinner(f"Running {SYSTEM_META[sel_system]['short']}…"):
+            out = run_system(query, sel_system)
 
-        # Intent + taste routing row
-        st.markdown(
-            intent_badge(out.get("intent", "?"), out.get("intent_confidence", 0))
-            + "  "
-            + taste_badge(out.get("use_taste", False), out.get("taste_key")),
-            unsafe_allow_html=True,
-        )
+        # Badge row: system + intent (S5 only) + taste
+        badges = system_badge(out["system_id"], out["system_short"]) + "  "
+        if out["intent"]:
+            badges += intent_badge(out["intent"], out["intent_confidence"] or 0) + "  "
+        badges += taste_badge(out["use_taste"], out["taste_key"])
+        if out["latency_ms"]:
+            badges += f'&nbsp;&nbsp;<span style="color:#666;font-size:0.8rem">⏱ {out["latency_ms"]:.0f} ms</span>'
+        st.markdown(badges, unsafe_allow_html=True)
 
         # Answer
         st.markdown(
@@ -215,14 +293,24 @@ with tab_chat:
             unsafe_allow_html=True,
         )
 
-        st.markdown("**Top matches**")
-        render_results(out.get("results", []))
+        if out["results"]:
+            st.markdown("**Top matches**")
+            render_results(out["results"])
 
 
 # ── TAB 2: Debug ────────────────────────────────────────────────────────────────
 
 with tab_debug:
-    st.markdown("Same pipeline as Chat — shows full routing trace and score breakdown.")
+    st.markdown("Full routing trace and per-result score breakdown.")
+
+    sel_system_d = st.radio(
+        "system_debug",
+        SYSTEM_LABELS,
+        index=4,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.caption(f"_{SYSTEM_META[sel_system_d]['desc']}_")
 
     query_d = st.text_input(
         "Query",
@@ -231,36 +319,31 @@ with tab_debug:
     )
 
     if query_d:
-        run_agent = get_agent()
-        with st.spinner("Running…"):
-            out = run_agent(query_d)
+        with st.spinner(f"Running {SYSTEM_META[sel_system_d]['short']}…"):
+            out = run_system(query_d, sel_system_d)
 
-        trace = out.get("trace", {})
-
-        # Metrics row
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Intent", f"{INTENT_EMOJI.get(out.get('intent','?'), '?')} {out.get('intent','?')}")
-        m2.metric("Confidence", f"{out.get('intent_confidence', 0):.0%}")
-        m3.metric("Taste", f"{'ON · ' + out.get('taste_key','') if out.get('use_taste') else 'OFF'}")
-        m4.metric("Total latency", f"{trace.get('total_ms', 0):.0f} ms")
+        m1.metric("System", out["system_short"])
+        m2.metric(
+            "Intent",
+            f"{INTENT_EMOJI.get(out['intent'], '—')} {out['intent']}"
+            if out["intent"] else "— (no router)",
+        )
+        m3.metric(
+            "Taste",
+            f"ON · {out['taste_key']}" if out["use_taste"] else "OFF",
+        )
+        m4.metric("Latency", f"{out['latency_ms']:.0f} ms")
 
-        # Timing breakdown
-        st.markdown("**Node timings**")
-        t_cols = st.columns(3)
-        t_cols[0].metric("Classify", f"{trace.get('classify_ms', 0):.0f} ms")
-        t_cols[1].metric("Retrieve", f"{trace.get('retrieve_ms', 0):.0f} ms")
-        t_cols[2].metric("Synthesise", f"{trace.get('synthesise_ms', 0):.0f} ms")
-
-        # Answer
         st.markdown("**Answer**")
         st.markdown(
             f'<div class="answer-box">{out["answer"]}</div>',
             unsafe_allow_html=True,
         )
 
-        # Results with score breakdown
-        st.markdown("**Retrieved results (with score components)**")
-        render_results(out.get("results", []), debug=True)
+        if out["results"]:
+            st.markdown("**Retrieved results (with score components)**")
+            render_results(out["results"], debug=True)
 
 
 # ── TAB 3: Catalogue ────────────────────────────────────────────────────────────
@@ -270,26 +353,16 @@ with tab_catalogue:
 
     df = load_catalogue()
 
-    # Filters
     f1, f2, f3, f4 = st.columns(4)
-
-    types = ["All"] + sorted(df["type"].unique().tolist())
-    sel_type = f1.selectbox("Type", types)
-
-    eras = ["All"] + sorted(df["era"].unique().tolist())
-    sel_era = f2.selectbox("Era", eras)
-
+    sel_type = f1.selectbox("Type", ["All"] + sorted(df["type"].unique().tolist()))
+    sel_era  = f2.selectbox("Era",  ["All"] + sorted(df["era"].unique().tolist()))
     all_moods = sorted({
-        m.strip()
-        for moods in df["mood"].dropna()
-        for m in moods.split(",")
+        m.strip() for moods in df["mood"].dropna() for m in moods.split(",")
     })
     sel_mood = f3.selectbox("Mood", ["All"] + all_moods)
+    min_r, max_r = f4.slider("Rating", 1, 10, (1, 10))
 
-    min_rating, max_rating = f4.slider("Rating range", 1, 10, (1, 10))
-
-    # Apply filters
-    mask = (df["your_rating"] >= min_rating) & (df["your_rating"] <= max_rating)
+    mask = (df["your_rating"] >= min_r) & (df["your_rating"] <= max_r)
     if sel_type != "All":
         mask &= df["type"] == sel_type
     if sel_era != "All":
@@ -300,12 +373,10 @@ with tab_catalogue:
     filtered = df[mask].sort_values("your_rating", ascending=False).reset_index(drop=True)
     st.caption(f"{len(filtered)} of {len(df)} entities")
 
-    # Display as cards (5 per row)
     CARDS_PER_ROW = 5
     for row_start in range(0, len(filtered), CARDS_PER_ROW):
-        row_df = filtered.iloc[row_start : row_start + CARDS_PER_ROW]
         cols = st.columns(CARDS_PER_ROW)
-        for col, (_, row) in zip(cols, row_df.iterrows()):
+        for col, (_, row) in zip(cols, filtered.iloc[row_start:row_start + CARDS_PER_ROW].iterrows()):
             with col:
                 img = _entity_image(row["entity_id"])
                 if img:
