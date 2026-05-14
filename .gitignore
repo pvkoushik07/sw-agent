@@ -8,5 +8,4 @@ data/images/*.jpeg
 data/images/*.png
 data/images/*.webp
 !data/images/.gitkeep
-eval/results/
 *.DS_Store

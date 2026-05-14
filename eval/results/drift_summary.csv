@@ -1,0 +1,13 @@
+system_vs_S2,family,avg_displaced,avg_gold_displaced,total_gold_displaced
+S3_single_taste,ambiguous_personalised,1.4,0.4,2
+S3_single_taste,cross_modal,0.6,0.0,0
+S3_single_taste,factual,1.2,0.2,1
+S3_single_taste,multi_hop,0.6,0.4,2
+S4_mood_no_router,ambiguous_personalised,2.0,0.4,2
+S4_mood_no_router,cross_modal,1.4,0.0,0
+S4_mood_no_router,factual,1.4,0.4,2
+S4_mood_no_router,multi_hop,1.0,0.4,2
+S5_full_agent,ambiguous_personalised,1.6,0.4,2
+S5_full_agent,cross_modal,0.0,0.0,0
+S5_full_agent,factual,0.0,0.0,0
+S5_full_agent,multi_hop,0.0,0.0,0
