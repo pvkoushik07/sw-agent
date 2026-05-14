@@ -161,5 +161,42 @@
     "relevant_entity_ids": ["c_bb8", "c_r2d2", "c_c3po", "c_k2so", "c_han"],
     "expected_intent": "mood_goofy",
     "notes": "mood_goofy centroid test — droids + Han carry goofy-tagged content. Now viable thanks to 7 entries rated >=7 tagged goofy."
+  },
+
+  {
+    "id": "FU1",
+    "family": "conversational_followup",
+    "turn1_query": "List Jedi characters from the prequel era",
+    "query": "Which of those did I rate highest?",
+    "relevant_entity_ids": ["c_obiwan_pt"],
+    "expected_intent": "comparative",
+    "notes": "Turn 2 references turn 1's prequel Jedi list. Highest rated is c_obiwan_pt (10/10). Without memory 'those' has no referent."
+  },
+  {
+    "id": "FU2",
+    "family": "conversational_followup",
+    "turn1_query": "Show me ships from the original trilogy era",
+    "query": "Which one made the Kessel Run?",
+    "relevant_entity_ids": ["s_falcon"],
+    "expected_intent": "factual",
+    "notes": "Turn 2 references the OT ship list. Kessel Run is unambiguously the Millennium Falcon. 'Which one' implicitly refers to the previous set."
+  },
+  {
+    "id": "FU3",
+    "family": "conversational_followup",
+    "turn1_query": "Find tragic episodes in my catalogue",
+    "query": "Of those, which one covers the Order 66 scene?",
+    "relevant_entity_ids": ["e_order66"],
+    "expected_intent": "factual",
+    "notes": "Turn 2 is a filter over turn 1's tragic episode list. e_order66 is the unique answer. 'Of those' is an explicit reference marker."
+  },
+  {
+    "id": "FU4",
+    "family": "conversational_followup",
+    "turn1_query": "List planets from the original trilogy",
+    "query": "Which of those has ice and snow?",
+    "relevant_entity_ids": ["p_hoth"],
+    "expected_intent": "similarity",
+    "notes": "Turn 2 applies a visual filter over turn 1's OT planet list. Hoth is the only ice planet. Tests CLIP + reference resolution together."
   }
 ]

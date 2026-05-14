@@ -145,6 +145,57 @@ def synthesise_answer(query: str, candidates: list[dict]) -> str:
 
 
 # ----------------------------------------------------------------------
+# Conversational reference resolver (used by resolve_references_node)
+# ----------------------------------------------------------------------
+
+_RESOLVE_PROMPT = """You are a query resolver for a conversational Star Wars retrieval system.
+
+Previous turn:
+  User query: __PREV_QUERY__
+  Entities retrieved: __PREV_ENTITIES__
+
+Current query: __CURRENT_QUERY__
+
+Does the current query contain a reference to the previous turn's results?
+Look for phrases like: "those", "of these", "from before", "that list",
+"of those", "which of those", "which of them", "among those", "the ones",
+"the results", "from that list", "you mentioned".
+
+If yes, rewrite the current query to be fully self-contained by incorporating
+the relevant entity names from the previous turn's results.
+If no, return the current query unchanged.
+
+Respond with ONLY a JSON object:
+{"has_reference": <true or false>, "rewritten_query": "<the (possibly rewritten) query>"}
+No other text, no markdown fences.
+"""
+
+
+def resolve_query_reference(query: str, last_turn: dict) -> dict[str, Any]:
+    """Return {"has_reference": bool, "rewritten_query": str}."""
+    prev_entities = ", ".join(last_turn.get("retrieved_names", last_turn.get("retrieved_ids", [])))
+    prompt = (
+        _RESOLVE_PROMPT
+        .replace("__PREV_QUERY__", last_turn.get("query", ""))
+        .replace("__PREV_ENTITIES__", prev_entities or "(none)")
+        .replace("__CURRENT_QUERY__", query)
+    )
+    try:
+        resp = _model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"},
+        )
+        data = json.loads(resp.text)
+        return {
+            "has_reference": bool(data.get("has_reference", False)),
+            "rewritten_query": str(data.get("rewritten_query", query)),
+        }
+    except Exception as e:
+        print(f"[llm] resolve_query_reference failed: {e}. Passing query through.")
+        return {"has_reference": False, "rewritten_query": query}
+
+
+# ----------------------------------------------------------------------
 # LLM-as-judge (used only in eval)
 # ----------------------------------------------------------------------
 

@@ -103,10 +103,52 @@ def figure5_latency() -> None:
     print(f"[plots] -> {out}")
 
 
+def figure6_modality_ablation() -> None:
+    """Grouped bar chart: Recall@5 by channel ablation × query family."""
+    path = config.RESULTS_DIR / "modality_summary_by_family.csv"
+    if not path.exists():
+        print(f"[plots] skipping fig6 — {path} not found (run eval.evaluate_modality first)")
+        return
+
+    df = pd.read_csv(path)
+    MODALITY_ORDER = ["S6_text_only", "S7_image_only", "S8_full_sanity"]
+    MODALITY_LABELS = {
+        "S6_text_only":   "S6: text only",
+        "S7_image_only":  "S7: image only",
+        "S8_full_sanity": "S8: full (sanity)",
+    }
+    MODALITY_COLORS = ["#4477aa", "#ee7733", "#228833"]
+
+    pivot = df.pivot(index="family", columns="system", values="recall_at_5")
+    # Only keep the three modality systems; fill missing with 0
+    for s in MODALITY_ORDER:
+        if s not in pivot.columns:
+            pivot[s] = 0.0
+    pivot = pivot.reindex(FAMILY_ORDER)[MODALITY_ORDER]
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    pivot.plot(kind="bar", ax=ax, width=0.7, color=MODALITY_COLORS)
+    ax.set_ylabel("Recall@5")
+    ax.set_title("Modality ablation: Recall@5 by channel and query family")
+    ax.set_xlabel("")
+    ax.set_xticklabels(FAMILY_ORDER, rotation=0)
+    ax.set_ylim(0, 1.05)
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(
+        [MODALITY_LABELS[s] for s in MODALITY_ORDER],
+        loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=3, frameon=False,
+    )
+    plt.tight_layout()
+    out = config.RESULTS_DIR / "fig6_modality_ablation.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"[plots] -> {out}")
+
+
 def main() -> None:
     figure3_recall_by_family()
     figure4_drift_factual()
     figure5_latency()
+    figure6_modality_ablation()
     print("[plots] all figures generated in eval/results/")
 
 

@@ -1,0 +1,13 @@
+system,family,recall_at_5,hit_at_3,mrr
+S6_text_only,ambiguous_personalised,0.45999999999999996,1.0,0.6666666666666666
+S6_text_only,cross_modal,0.8,0.8,0.7
+S6_text_only,factual,0.8800000000000001,1.0,1.0
+S6_text_only,multi_hop,0.8099999999999999,0.6,0.7
+S7_image_only,ambiguous_personalised,0.45999999999999996,0.8,0.5666666666666667
+S7_image_only,cross_modal,0.8,0.8,0.8
+S7_image_only,factual,0.5,0.8,0.7
+S7_image_only,multi_hop,0.72,0.8,0.5166666666666667
+S8_full_sanity,ambiguous_personalised,0.5,1.0,0.6666666666666666
+S8_full_sanity,cross_modal,0.8,0.8,0.7
+S8_full_sanity,factual,0.8800000000000001,1.0,1.0
+S8_full_sanity,multi_hop,0.8099999999999999,0.6,0.6900000000000001

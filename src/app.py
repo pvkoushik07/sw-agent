@@ -140,6 +140,13 @@ def _load_agent():
     return run_agent
 
 
+def _init_session():
+    if "history" not in st.session_state:
+        st.session_state.history = []
+    if "chat_turns" not in st.session_state:
+        st.session_state.chat_turns = []  # [{query, answer, intent, use_taste, taste_key, system}]
+
+
 @st.cache_data(show_spinner=False)
 def load_catalogue() -> pd.DataFrame:
     return pd.read_csv(config.ENTITIES_CSV)
@@ -147,26 +154,26 @@ def load_catalogue() -> pd.DataFrame:
 
 # ── Run a system variant ────────────────────────────────────────────────────────
 
-def run_system(query: str, label: str) -> dict:
+def run_system(query: str, label: str, history: list[dict] | None = None) -> dict:
     meta = SYSTEM_META[label]
     sys_id = meta["id"]
 
     if sys_id == "S1":
-        retrieve, llm = _load_retrieve_and_llm()
         t0 = time.perf_counter()
         answer = "I don't have access to your catalogue in this mode — this is the plain LLM baseline."
-        latency_ms = (time.perf_counter() - t0) * 1000
         return {
             "system_id": sys_id, "system_short": meta["short"],
             "answer": answer, "results": [],
             "use_taste": False, "taste_key": None,
             "intent": None, "intent_confidence": None,
-            "latency_ms": latency_ms,
+            "latency_ms": (time.perf_counter() - t0) * 1000,
+            "reference_detected": False, "resolved_query": None,
+            "updated_history": history or [],
         }
 
     if sys_id == "S5":
         run_agent = _load_agent()
-        out = run_agent(query)
+        out = run_agent(query, history=history or [])
         results = out.get("results", [])
         return {
             "system_id": sys_id, "system_short": meta["short"],
@@ -177,14 +184,16 @@ def run_system(query: str, label: str) -> dict:
             "intent": out.get("intent"),
             "intent_confidence": out.get("intent_confidence"),
             "latency_ms": out.get("trace", {}).get("total_ms", 0),
+            "reference_detected": out.get("reference_detected", False),
+            "resolved_query": out.get("resolved_query"),
+            "updated_history": out.get("history", []),
         }
 
-    # S2 / S3 / S4
+    # S2 / S3 / S4 — no router, no memory
     retrieve, llm = _load_retrieve_and_llm()
     t0 = time.perf_counter()
     trace = retrieve(query, use_taste=meta["use_taste"], taste_key=meta["taste_key"] or "overall")
     synth = llm.synthesise_answer(query, [r.metadata for r in trace.results])
-    latency_ms = (time.perf_counter() - t0) * 1000
     return {
         "system_id": sys_id, "system_short": meta["short"],
         "answer": synth,
@@ -193,7 +202,9 @@ def run_system(query: str, label: str) -> dict:
         "taste_key": meta["taste_key"],
         "intent": None,
         "intent_confidence": None,
-        "latency_ms": latency_ms,
+        "latency_ms": (time.perf_counter() - t0) * 1000,
+        "reference_detected": False, "resolved_query": None,
+        "updated_history": [],
     }
 
 
@@ -229,6 +240,8 @@ def render_results(results, debug: bool = False):
 
 # ── Layout ──────────────────────────────────────────────────────────────────────
 
+_init_session()
+
 st.title("🌌 Taste-Aware Star Wars Agent")
 st.caption("UQ INFS4205/7205 — A3 · Personalised Multimodal Retrieval")
 
@@ -238,18 +251,47 @@ tab_chat, tab_debug, tab_catalogue = st.tabs(["💬 Chat", "🔧 Debug", "📚 C
 # ── TAB 1: Chat ─────────────────────────────────────────────────────────────────
 
 with tab_chat:
-    # System selector
-    st.markdown("**System variant**")
-    sel_system = st.radio(
-        "system",
-        SYSTEM_LABELS,
-        index=4,  # default to S5
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+    # System selector + clear button on one row
+    ctrl_left, ctrl_right = st.columns([5, 1])
+    with ctrl_left:
+        sel_system = st.radio(
+            "system",
+            SYSTEM_LABELS,
+            index=4,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+    with ctrl_right:
+        if st.button("🗑 Clear", use_container_width=True, help="Clear conversation history"):
+            st.session_state.history = []
+            st.session_state.chat_turns = []
+            st.rerun()
+
     st.caption(f"_{SYSTEM_META[sel_system]['desc']}_")
+    if sel_system != "S5 — Full agent: router + mood centroids":
+        st.caption("_Note: conversation memory only works with S5 (router resolves references)._")
 
     st.divider()
+
+    # Conversation history display
+    if st.session_state.chat_turns:
+        st.markdown("**Conversation so far**")
+        for turn in st.session_state.chat_turns:
+            with st.chat_message("user"):
+                st.write(turn["query"])
+            with st.chat_message("assistant"):
+                if turn.get("reference_detected"):
+                    st.caption(f"_Reference resolved: \"{turn['resolved_query']}\"_")
+                badges = system_badge(turn["system_id"], turn["system_short"]) + "  "
+                if turn.get("intent"):
+                    badges += intent_badge(turn["intent"], turn.get("intent_confidence") or 0) + "  "
+                badges += taste_badge(turn.get("use_taste", False), turn.get("taste_key"))
+                st.markdown(badges, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="answer-box">{turn["answer"]}</div>',
+                    unsafe_allow_html=True,
+                )
+        st.divider()
 
     # Example queries
     EXAMPLES = [
@@ -268,26 +310,47 @@ with tab_chat:
             clicked = ex
 
     query = st.text_input(
-        "Or type your own query",
+        "Or type your query",
         value=clicked or "",
         placeholder="a sweeping epic moment",
         key="q_chat",
     )
 
     if query:
+        history_for_s5 = st.session_state.history if sel_system == "S5 — Full agent: router + mood centroids" else []
         with st.spinner(f"Running {SYSTEM_META[sel_system]['short']}…"):
-            out = run_system(query, sel_system)
+            out = run_system(query, sel_system, history=history_for_s5)
 
-        # Badge row: system + intent (S5 only) + taste
+        # Update session history (S5 only)
+        if sel_system == "S5 — Full agent: router + mood centroids":
+            st.session_state.history = out.get("updated_history", [])
+
+        # Store turn for history display
+        st.session_state.chat_turns.append({
+            "query": query,
+            "answer": out["answer"],
+            "system_id": out["system_id"],
+            "system_short": out["system_short"],
+            "intent": out.get("intent"),
+            "intent_confidence": out.get("intent_confidence"),
+            "use_taste": out.get("use_taste", False),
+            "taste_key": out.get("taste_key"),
+            "reference_detected": out.get("reference_detected", False),
+            "resolved_query": out.get("resolved_query"),
+        })
+
+        # Current turn badges
         badges = system_badge(out["system_id"], out["system_short"]) + "  "
-        if out["intent"]:
-            badges += intent_badge(out["intent"], out["intent_confidence"] or 0) + "  "
-        badges += taste_badge(out["use_taste"], out["taste_key"])
+        if out.get("intent"):
+            badges += intent_badge(out["intent"], out.get("intent_confidence") or 0) + "  "
+        badges += taste_badge(out.get("use_taste", False), out.get("taste_key"))
         if out["latency_ms"]:
             badges += f'&nbsp;&nbsp;<span style="color:#666;font-size:0.8rem">⏱ {out["latency_ms"]:.0f} ms</span>'
         st.markdown(badges, unsafe_allow_html=True)
 
-        # Answer
+        if out.get("reference_detected"):
+            st.info(f"Reference resolved: \"{out['resolved_query']}\"")
+
         st.markdown(
             f'<div class="answer-box">{out["answer"]}</div>',
             unsafe_allow_html=True,
@@ -319,21 +382,33 @@ with tab_debug:
     )
 
     if query_d:
+        # Debug tab uses current S5 session history so you can test follow-ups
+        debug_history = (
+            st.session_state.history
+            if sel_system_d == "S5 — Full agent: router + mood centroids"
+            else []
+        )
         with st.spinner(f"Running {SYSTEM_META[sel_system_d]['short']}…"):
-            out = run_system(query_d, sel_system_d)
+            out = run_system(query_d, sel_system_d, history=debug_history)
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("System", out["system_short"])
         m2.metric(
             "Intent",
-            f"{INTENT_EMOJI.get(out['intent'], '—')} {out['intent']}"
-            if out["intent"] else "— (no router)",
+            f"{INTENT_EMOJI.get(out.get('intent',''), '—')} {out.get('intent','')}"
+            if out.get("intent") else "— (no router)",
         )
-        m3.metric(
-            "Taste",
-            f"ON · {out['taste_key']}" if out["use_taste"] else "OFF",
-        )
+        m3.metric("Taste", f"ON · {out['taste_key']}" if out.get("use_taste") else "OFF")
         m4.metric("Latency", f"{out['latency_ms']:.0f} ms")
+
+        # Reference resolution display
+        if out.get("reference_detected"):
+            st.info(
+                f"**resolve_references fired** — rewritten query: "
+                f"\"{out['resolved_query']}\""
+            )
+        elif sel_system_d == "S5 — Full agent: router + mood centroids":
+            st.caption("_resolve_references: no referential phrase detected_")
 
         st.markdown("**Answer**")
         st.markdown(
