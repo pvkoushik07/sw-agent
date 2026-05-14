@@ -1,5 +1,11 @@
 """Streamlit UI. Run: streamlit run src/app.py"""
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path so `from src import ...` works regardless
+# of where streamlit is invoked from.
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import streamlit as st
