@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ class SystemOutput:
     answer: str
     latency_ms: float
     intent: str | None = None
+    candidates: list[dict] = field(default_factory=list)
 
 
 def system_plain_llm(query: str) -> SystemOutput:
@@ -55,21 +56,29 @@ def system_plain_llm(query: str) -> SystemOutput:
 
 def system_hybrid_no_taste(query: str) -> SystemOutput:
     trace = retrieve(query, use_taste=False)
-    answer = llm.synthesise_answer(query, [r.metadata for r in trace.results])
+    metas = [r.metadata for r in trace.results]
+    t0 = time.perf_counter()
+    answer = llm.synthesise_answer(query, metas)
+    synth_ms = (time.perf_counter() - t0) * 1000
     return SystemOutput(
         retrieved_ids=[r.entity_id for r in trace.results],
         answer=answer,
-        latency_ms=trace.latency_ms,
+        latency_ms=trace.latency_ms + synth_ms,
+        candidates=metas,
     )
 
 
 def system_single_taste(query: str) -> SystemOutput:
     trace = retrieve(query, use_taste=True, taste_key="overall")
-    answer = llm.synthesise_answer(query, [r.metadata for r in trace.results])
+    metas = [r.metadata for r in trace.results]
+    t0 = time.perf_counter()
+    answer = llm.synthesise_answer(query, metas)
+    synth_ms = (time.perf_counter() - t0) * 1000
     return SystemOutput(
         retrieved_ids=[r.entity_id for r in trace.results],
         answer=answer,
-        latency_ms=trace.latency_ms,
+        latency_ms=trace.latency_ms + synth_ms,
+        candidates=metas,
     )
 
 
@@ -77,21 +86,27 @@ def system_mood_no_router(query: str) -> SystemOutput:
     """Mood centroid applied uniformly. Default to mood_tragic for everything
     — the 'always-on mood' ablation isolates the router's contribution."""
     trace = retrieve(query, use_taste=True, taste_key="mood_tragic")
-    answer = llm.synthesise_answer(query, [r.metadata for r in trace.results])
+    metas = [r.metadata for r in trace.results]
+    t0 = time.perf_counter()
+    answer = llm.synthesise_answer(query, metas)
+    synth_ms = (time.perf_counter() - t0) * 1000
     return SystemOutput(
         retrieved_ids=[r.entity_id for r in trace.results],
         answer=answer,
-        latency_ms=trace.latency_ms,
+        latency_ms=trace.latency_ms + synth_ms,
+        candidates=metas,
     )
 
 
 def system_full_agent(query: str) -> SystemOutput:
     out = run_agent(query)
+    results = out.get("results", [])
     return SystemOutput(
-        retrieved_ids=[r.entity_id for r in out.get("results", [])],
+        retrieved_ids=[r.entity_id for r in results],
         answer=out.get("answer", ""),
         latency_ms=out.get("trace", {}).get("total_ms", 0),
         intent=out.get("intent"),
+        candidates=[r.metadata for r in results],
     )
 
 
@@ -129,8 +144,13 @@ def main() -> None:
                 continue
 
             ground = {"score": 0, "reasoning": "n/a"}
-            if sys_name != "S1_plain_llm" and out.retrieved_ids:
-                ctx = "\n".join(out.retrieved_ids[:5])
+            if sys_name != "S1_plain_llm" and out.candidates:
+                ctx = "\n".join(
+                    f"{c.get('name')} ({c.get('first_appearance')}) — "
+                    f"rated {c.get('your_rating')}/10, mood: {c.get('mood')}. "
+                    f"Take: {c.get('your_take')}"
+                    for c in out.candidates[:5]
+                )
                 ground = llm.judge_groundedness(query, ctx, out.answer)
 
             rows.append({
