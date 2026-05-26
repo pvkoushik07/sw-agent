@@ -119,11 +119,52 @@ def taste_badge(use_taste: bool, taste_key: str | None) -> str:
     return '<span class="intent-badge badge-taste-off">⬜ taste OFF</span>'
 
 
+ROUTING_EXPLANATION = {
+    "factual":       "Detected as a **factual** query — personalisation is **OFF**. Retrieving on text similarity and metadata only.",
+    "similarity":    "Detected as a **visual / similarity** query — personalisation is **OFF**. Matching on text and CLIP image embeddings.",
+    "comparative":   "Detected as a **comparative** query — personalisation is **OFF**. Filtering across metadata attributes (era, rating, type).",
+    "mood_tragic":   "Detected as a **mood: tragic** query — personalisation is **ON** using your *tragic* taste centroid.",
+    "mood_epic":     "Detected as a **mood: epic** query — personalisation is **ON** using your *epic* taste centroid.",
+    "mood_political":"Detected as a **mood: political** query — personalisation is **ON** using your *political* taste centroid.",
+    "mood_cathartic":"Detected as a **mood: cathartic** query — personalisation is **ON** using your *cathartic* taste centroid.",
+    "mood_goofy":    "Detected as a **mood: goofy** query — personalisation is **ON** using your *goofy* taste centroid.",
+    "mood_general":  "Detected as a **general subjective** query — personalisation is **ON** using your overall taste centroid.",
+}
+
+
+def _render_routing_decision(turn: dict) -> None:
+    """Render intent badge, taste badge, latency, routing explanation, and reference note."""
+    intent = turn.get("intent")
+    confidence = turn.get("intent_confidence") or 0
+    use_taste = turn.get("use_taste", False)
+    taste_key = turn.get("taste_key")
+    latency = turn.get("latency_ms", 0)
+
+    badges = ""
+    if intent:
+        badges += intent_badge(intent, confidence) + "  "
+    badges += taste_badge(use_taste, taste_key)
+    if latency:
+        badges += f'&nbsp;&nbsp;<span style="color:#666;font-size:0.8rem">⏱ {latency:.0f} ms</span>'
+    st.markdown(badges, unsafe_allow_html=True)
+
+    if intent:
+        st.caption(ROUTING_EXPLANATION.get(intent, ""))
+
+    if turn.get("reference_detected") and turn.get("resolved_query"):
+        st.caption(f"↩ _Reference resolved → \"{turn['resolved_query']}\"_")
+
+
 def _entity_image(entity_id: str) -> str | None:
+    from PIL import Image as PILImage
     for ext in (".jpg", ".jpeg", ".png", ".webp"):
         p = config.IMAGES_DIR / f"{entity_id}{ext}"
         if p.exists():
-            return str(p)
+            try:
+                PILImage.open(p).verify()
+                return str(p)
+            except Exception:
+                return None
     return None
 
 
@@ -220,7 +261,7 @@ def render_results(results, debug: bool = False):
         img = _entity_image(meta["entity_id"])
         with col:
             if img:
-                st.image(img, use_container_width=True)
+                st.image(img, use_column_width=True)
             st.markdown(f"**{meta['name']}**")
             st.caption(f"⭐ {meta['your_rating']}/10 · {meta['type']} · {meta['era']}")
             st.caption(f"*{meta['mood']}*")
@@ -251,42 +292,24 @@ tab_chat, tab_debug, tab_catalogue = st.tabs(["💬 Chat", "🔧 Debug", "📚 C
 # ── TAB 1: Chat ─────────────────────────────────────────────────────────────────
 
 with tab_chat:
-    # System selector + clear button on one row
-    ctrl_left, ctrl_right = st.columns([5, 1])
-    with ctrl_left:
-        sel_system = st.radio(
-            "system",
-            SYSTEM_LABELS,
-            index=4,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-    with ctrl_right:
+    col_desc, col_clear = st.columns([6, 1])
+    with col_desc:
+        st.caption("The router automatically classifies each query and decides whether to apply your personal taste — no manual selection needed.")
+    with col_clear:
         if st.button("🗑 Clear", use_container_width=True, help="Clear conversation history"):
             st.session_state.history = []
             st.session_state.chat_turns = []
             st.rerun()
 
-    st.caption(f"_{SYSTEM_META[sel_system]['desc']}_")
-    if sel_system != "S5 — Full agent: router + mood centroids":
-        st.caption("_Note: conversation memory only works with S5 (router resolves references)._")
-
     st.divider()
 
     # Conversation history display
     if st.session_state.chat_turns:
-        st.markdown("**Conversation so far**")
         for turn in st.session_state.chat_turns:
             with st.chat_message("user"):
                 st.write(turn["query"])
             with st.chat_message("assistant"):
-                if turn.get("reference_detected"):
-                    st.caption(f"_Reference resolved: \"{turn['resolved_query']}\"_")
-                badges = system_badge(turn["system_id"], turn["system_short"]) + "  "
-                if turn.get("intent"):
-                    badges += intent_badge(turn["intent"], turn.get("intent_confidence") or 0) + "  "
-                badges += taste_badge(turn.get("use_taste", False), turn.get("taste_key"))
-                st.markdown(badges, unsafe_allow_html=True)
+                _render_routing_decision(turn)
                 st.markdown(
                     f'<div class="answer-box">{turn["answer"]}</div>',
                     unsafe_allow_html=True,
@@ -317,15 +340,11 @@ with tab_chat:
     )
 
     if query:
-        history_for_s5 = st.session_state.history if sel_system == "S5 — Full agent: router + mood centroids" else []
-        with st.spinner(f"Running {SYSTEM_META[sel_system]['short']}…"):
-            out = run_system(query, sel_system, history=history_for_s5)
+        with st.spinner("Classifying intent and retrieving…"):
+            out = run_system(query, "S5 — Full agent: router + mood centroids", history=st.session_state.history)
 
-        # Update session history (S5 only)
-        if sel_system == "S5 — Full agent: router + mood centroids":
-            st.session_state.history = out.get("updated_history", [])
+        st.session_state.history = out.get("updated_history", [])
 
-        # Store turn for history display
         st.session_state.chat_turns.append({
             "query": query,
             "answer": out["answer"],
@@ -337,19 +356,10 @@ with tab_chat:
             "taste_key": out.get("taste_key"),
             "reference_detected": out.get("reference_detected", False),
             "resolved_query": out.get("resolved_query"),
+            "latency_ms": out.get("latency_ms", 0),
         })
 
-        # Current turn badges
-        badges = system_badge(out["system_id"], out["system_short"]) + "  "
-        if out.get("intent"):
-            badges += intent_badge(out["intent"], out.get("intent_confidence") or 0) + "  "
-        badges += taste_badge(out.get("use_taste", False), out.get("taste_key"))
-        if out["latency_ms"]:
-            badges += f'&nbsp;&nbsp;<span style="color:#666;font-size:0.8rem">⏱ {out["latency_ms"]:.0f} ms</span>'
-        st.markdown(badges, unsafe_allow_html=True)
-
-        if out.get("reference_detected"):
-            st.info(f"Reference resolved: \"{out['resolved_query']}\"")
+        _render_routing_decision(out)
 
         st.markdown(
             f'<div class="answer-box">{out["answer"]}</div>',
@@ -358,7 +368,7 @@ with tab_chat:
 
         if out["results"]:
             st.markdown("**Top matches**")
-            render_results(out["results"])
+            render_results(out["results"][:3])
 
 
 # ── TAB 2: Debug ────────────────────────────────────────────────────────────────
@@ -455,7 +465,7 @@ with tab_catalogue:
             with col:
                 img = _entity_image(row["entity_id"])
                 if img:
-                    st.image(img, use_container_width=True)
+                    st.image(img, use_column_width=True)
                 st.markdown(f"**{row['name']}**")
                 st.caption(f"⭐ {row['your_rating']}/10 · {row['type']}")
                 st.caption(f"{row['era']} · *{row['mood']}*")

@@ -144,11 +144,35 @@ def figure6_modality_ablation() -> None:
     print(f"[plots] -> {out}")
 
 
+def figure7_hit3_by_family() -> None:
+    """Grouped bar chart: Hit@3 across systems × families."""
+    df = pd.read_csv(config.RESULTS_DIR / "summary_by_family.csv")
+    pivot = df.pivot(index="family", columns="system", values="hit_at_3")
+    pivot = pivot.reindex(FAMILY_ORDER)[SYSTEM_ORDER]
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    pivot.plot(kind="bar", ax=ax, width=0.8,
+               color=["#aaaaaa", "#4477aa", "#ee9933", "#bb5566", "#117733"])
+    ax.set_ylabel("Hit@3")
+    ax.set_title("Hit@3 by system and query family")
+    ax.set_xlabel("")
+    ax.set_xticklabels(FAMILY_ORDER, rotation=0)
+    ax.set_ylim(0, 1.05)
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend([SYSTEM_LABELS[s] for s in SYSTEM_ORDER],
+              loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=5, frameon=False)
+    plt.tight_layout()
+    out = config.RESULTS_DIR / "fig7_hit3_by_family.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"[plots] -> {out}")
+
+
 def main() -> None:
     figure3_recall_by_family()
     figure4_drift_factual()
     figure5_latency()
     figure6_modality_ablation()
+    figure7_hit3_by_family()
     print("[plots] all figures generated in eval/results/")
 
 

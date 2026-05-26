@@ -106,6 +106,7 @@ def retrieve_node(state: AgentState) -> AgentState:
         use_taste=state.get("use_taste", False),
         taste_key=state.get("taste_key") or "overall",
         top_k=config.TOP_K_FINAL,
+        intent=state.get("intent"),
     )
     state["results"] = trace.results
     state.setdefault("trace", {})["retrieve_ms"] = trace.latency_ms

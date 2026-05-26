@@ -45,15 +45,18 @@ def _get_centroids() -> dict[str, np.ndarray]:
 
 
 def _keyword_match_score(query: str, meta: dict) -> float:
-    """Bag-of-words overlap between query tokens and metadata fields."""
-    q_tokens = {t.lower() for t in query.split() if len(t) > 2}
+    """Bag-of-words overlap between query tokens and metadata + visual_description fields."""
+    import re
+    q_tokens = {re.sub(r"[^\w]", "", t.lower()) for t in query.split() if len(t) > 2}
+    q_tokens.discard("")
     if not q_tokens:
         return 0.0
     fields = " ".join(
         str(meta.get(k, "")) for k in
-        ("name", "type", "era", "faction", "mood", "canon_status", "medium")
+        ("name", "type", "era", "faction", "mood", "canon_status", "medium", "visual_description")
     ).lower()
-    field_tokens = set(fields.replace(",", " ").split())
+    field_tokens = {re.sub(r"[^\w]", "", t) for t in fields.split()}
+    field_tokens.discard("")
     overlap = len(q_tokens & field_tokens)
     return overlap / max(1, len(q_tokens))
 
@@ -85,9 +88,22 @@ def retrieve(
     taste_key: str = "overall",
     top_k: int = config.TOP_K_FINAL,
     image_query_path: str | None = None,
+    intent: str | None = None,
 ) -> RetrievalTrace:
-    """Fused retrieval. taste_key is one of: overall | mood_tragic | mood_epic | mood_political | mood_cathartic."""
+    """Fused retrieval. taste_key is one of: overall | mood_tragic | mood_epic | mood_political | mood_cathartic.
+    intent is used to adjust fusion weights for similarity queries (boosts visual/keyword channels)."""
     t0 = time.perf_counter()
+
+    # Adjust fusion weights for visual/similarity queries — same selectivity principle
+    # applied to modality weights as to taste: don't apply text-heavy weights when the
+    # user is querying by appearance.
+    alpha = config.ALPHA
+    gamma = config.GAMMA
+    delta = config.DELTA
+    if intent == "similarity":
+        alpha = 0.35
+        gamma = 0.30
+        delta = 0.10
 
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
     text_coll = client.get_collection(config.TEXT_COLLECTION)
@@ -101,8 +117,9 @@ def retrieve(
         include=["embeddings", "metadatas", "distances"],
     )
 
-    # 2. Image similarity.
+    # 2. Image similarity — also collect CLIP-only candidates not in text top-N.
     image_sims: dict[str, float] = {}
+    clip_only_ids: list[str] = []
     try:
         image_coll = client.get_collection(config.IMAGE_COLLECTION)
         img_model = _get_image_model()
@@ -111,17 +128,32 @@ def retrieve(
             img = PILImage.open(image_query_path).convert("RGB")
             img_q = img_model.encode([img], normalize_embeddings=True)[0]
         else:
-            # CLIP can take text too — useful for "the character with black armor"
             img_q = img_model.encode([query], normalize_embeddings=True)[0]
         img_res = image_coll.query(
             query_embeddings=[img_q.tolist()],
             n_results=config.TOP_K_CANDIDATES,
             include=["distances"],
         )
+        text_ids = set(text_res["ids"][0])
         for eid, dist in zip(img_res["ids"][0], img_res["distances"][0]):
             image_sims[eid] = 1.0 - dist
+            if eid not in text_ids:
+                clip_only_ids.append(eid)
     except Exception as e:
         print(f"[retrieve] image query failed: {e}")
+
+    # 2b. Fetch text embeddings + metadata for CLIP-only candidates so they
+    #     participate in fusion even when text search missed them.
+    extra_embs: dict[str, np.ndarray] = {}
+    extra_metas: dict[str, dict] = {}
+    extra_sims: dict[str, float] = {}
+    if clip_only_ids:
+        extra = text_coll.get(ids=clip_only_ids, include=["embeddings", "metadatas"])
+        for eid, emb, meta in zip(extra["ids"], extra["embeddings"], extra["metadatas"]):
+            arr = np.array(emb)
+            extra_embs[eid] = arr
+            extra_metas[eid] = meta
+            extra_sims[eid] = float(np.dot(q_emb, arr))
 
     # 3. Taste centroid.
     centroid = None
@@ -129,8 +161,9 @@ def retrieve(
         centroids = _get_centroids()
         centroid = centroids.get(taste_key, centroids.get("overall"))
 
-    # 4. Fusion.
+    # 4. Fusion over text candidates + CLIP-only candidates.
     candidates: list[RetrievalResult] = []
+
     for eid, doc_emb, meta, dist in zip(
         text_res["ids"][0],
         text_res["embeddings"][0],
@@ -141,26 +174,36 @@ def retrieve(
         meta_score = _keyword_match_score(query, meta)
         img_sim = image_sims.get(eid, 0.0)
         taste_align = _taste_alignment(np.array(doc_emb), centroid) if centroid is not None else 0.0
-
         final = (
-            config.ALPHA * query_sim
+            alpha * query_sim
             + config.BETA * taste_align * (1.0 if use_taste else 0.0)
-            + config.GAMMA * meta_score
-            + config.DELTA * img_sim
+            + gamma * meta_score
+            + delta * img_sim
         )
-        candidates.append(
-            RetrievalResult(
-                entity_id=eid,
-                metadata=meta,
-                final_score=final,
-                components={
-                    "query_sim": query_sim,
-                    "taste_align": taste_align,
-                    "meta_score": meta_score,
-                    "image_sim": img_sim,
-                },
-            )
+        candidates.append(RetrievalResult(
+            entity_id=eid, metadata=meta, final_score=final,
+            components={"query_sim": query_sim, "taste_align": taste_align,
+                        "meta_score": meta_score, "image_sim": img_sim},
+        ))
+
+    for eid in clip_only_ids:
+        doc_emb = extra_embs[eid]
+        meta = extra_metas[eid]
+        query_sim = extra_sims[eid]
+        img_sim = image_sims.get(eid, 0.0)
+        meta_score = _keyword_match_score(query, meta)
+        taste_align = _taste_alignment(doc_emb, centroid) if centroid is not None else 0.0
+        final = (
+            alpha * query_sim
+            + config.BETA * taste_align * (1.0 if use_taste else 0.0)
+            + gamma * meta_score
+            + delta * img_sim
         )
+        candidates.append(RetrievalResult(
+            entity_id=eid, metadata=meta, final_score=final,
+            components={"query_sim": query_sim, "taste_align": taste_align,
+                        "meta_score": meta_score, "image_sim": img_sim},
+        ))
 
     candidates.sort(key=lambda r: r.final_score, reverse=True)
     top = candidates[:top_k]
